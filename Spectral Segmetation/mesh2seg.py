@@ -4,7 +4,7 @@ import argparse
 import numpy as np
 from scipy.sparse import dok_matrix
 from sklearn.cluster import spectral_clustering
-import vedo 
+from trimesh.visual.color import to_rgba
 
 SEGMENTATION_COLORMAP = np.array(
     ((165, 242, 12), (89, 12, 89), (165, 89, 165), (242, 242, 165),
@@ -22,14 +22,36 @@ def adjacency_matrix(sf, se):
         adj_matrix[j, i] = 1
     return adj_matrix
 
-def mesh_by_label(sf, sv, labels, n=0):
-    index = np.arange(len(labels))
-    index = index[labels == n]
-    svNew = sv[index]
-    sfNew = sf[~np.any(np.isin(sf, index), axis=1)]
-    return sfNew, svNew
+def vertex_to_face_color(color, faces):
+    vertex_colors = to_rgba(color)
+    def pickColor(face):
+        values, counts = np.unique(vertex_colors[face], return_counts=True, axis=0)
+        return values[np.argmax(counts)]
+    face_colors = np.array(list(map(pickColor, faces)))
+    return face_colors.astype(np.uint8)
 
+def cluster_adjacency(mesh, clusters):
+    clustersAdjacency = np.zeros((clusters, clusters))
 
+    clusterVertices = {}
+    for cluster in range(clusters):
+        face_mask = (mesh.visual.face_colors == to_rgba(SEGMENTATION_COLORMAP[cluster])).all(axis=1)
+        clusterVertices[cluster] = np.unique(mesh.faces[face_mask])
+
+    for i in range(clusters):
+        for j in range(clusters):
+            if i != j:
+                if np.isin(clusterVertices[i], clusterVertices[j]).any():
+                    clustersAdjacency[i,j] = 1
+                    
+    return clustersAdjacency
+
+def segmentationExport(*cluster_list, name='segment'):
+    for cluster in cluster_list:
+        meshCopy = mesh.copy()
+        face_mask = (meshCopy.visual.face_colors == to_rgba(SEGMENTATION_COLORMAP[cluster])).all(axis=1)
+        meshCopy.update_faces(face_mask)
+        meshCopy.export(f'{name}-{cluster}.ply')
 #%%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -44,5 +66,11 @@ if __name__ == '__main__':
     adj_matrix = adjacency_matrix(sf, se) # adjacency matrix
     
     labels = spectral_clustering(adj_matrix, n_clusters=args.clusters) # 9 for real
-    mesh = trimesh.Trimesh(vertices=sv, faces=sf, vertex_colors=SEGMENTATION_COLORMAP[labels])
+    mesh = trimesh.Trimesh(vertices=sv, faces=sf)    
+    mesh.visual.face_colors = vertex_to_face_color(SEGMENTATION_COLORMAP[labels], sf)
     mesh.export(f'{args.name.split(".")[0]}2seg.ply')
+    
+    cluster_adj = cluster_adjacency(mesh, args.clusters)
+    selected_clusters = np.where(np.sum(cluster_adj, axis=1)>=4)[0]
+    
+    segmentationExport(*selected_clusters, name=args.name.split(".")[0])

@@ -1,9 +1,10 @@
 #%%
+import os
 import trimesh
 import argparse
 import numpy as np
 from scipy.sparse import dok_matrix
-from sklearn.cluster import spectral_clustering
+from sklearn.cluster import spectral_clustering, SpectralClustering
 from trimesh.visual.color import to_rgba
 
 SEGMENTATION_COLORMAP = np.array(
@@ -46,31 +47,41 @@ def cluster_adjacency(mesh, clusters):
                     
     return clustersAdjacency
 
-def segmentationExport(*cluster_list, name='segment'):
+def segmentationExport(mesh, *cluster_list, name='segment'):
     for cluster in cluster_list:
         meshCopy = mesh.copy()
         face_mask = (meshCopy.visual.face_colors == to_rgba(SEGMENTATION_COLORMAP[cluster])).all(axis=1)
         meshCopy.update_faces(face_mask)
         meshCopy.export(f'{name}-{cluster}.ply')
-#%%
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-n', '--name', default='cow.ply', help="Path to mesh to be converted")
-    parser.add_argument('-c', '--clusters', default=9, type=int, help="Path to mesh to be converted")
-    args = parser.parse_args()
-    
+
+def main(args):
     mesh = trimesh.load(args.name)
     sf = mesh.faces # mesh face
     sv = mesh.vertices # mesh vertices
     se = mesh.edges # mesh edges
     adj_matrix = adjacency_matrix(sf, se) # adjacency matrix
     
-    labels = spectral_clustering(adj_matrix, n_clusters=args.clusters) # 9 for real
+    #labels = spectral_clustering(adj_matrix, n_clusters=args.clusters, n_init=100) # 9 for real
+    labels = SpectralClustering(n_clusters=args.clusters, n_init=100, n_neighbors=100, affinity='precomputed').fit(adj_matrix).labels_ # 9 for real
     mesh = trimesh.Trimesh(vertices=sv, faces=sf)    
     mesh.visual.face_colors = vertex_to_face_color(SEGMENTATION_COLORMAP[labels], sf)
-    mesh.export(f'{args.name.split(".")[0]}2seg.ply')
+    mesh.export(f'{args.export_path}/{args.name.split("/")[-1].split(".")[0]}2seg.ply')
     
     cluster_adj = cluster_adjacency(mesh, args.clusters)
-    selected_clusters = np.where(np.sum(cluster_adj, axis=1)>=4)[0]
+    selected_clusters = np.where(np.sum(cluster_adj, axis=1)>=3)[0]
     
-    segmentationExport(*selected_clusters, name=args.name.split(".")[0])
+    segmentationExport(mesh, *selected_clusters, name=f'{args.export_path}/{args.name.split("/")[-1].split(".")[0]}')
+
+#%%
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-n', '--name', default='cow.ply', help="Path to mesh to be converted")
+    parser.add_argument('-c', '--clusters', default=9, type=int, help="Path to mesh to be converted")
+    parser.add_argument('-e', '--export_path', default='output/', help="Output folder")
+    args = parser.parse_args()
+    
+    try: os.mkdir(args.export_path)
+    except: pass
+    main(args)
+    
+    

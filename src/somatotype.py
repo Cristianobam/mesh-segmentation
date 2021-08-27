@@ -1,6 +1,7 @@
 #%%
 import trimesh
 import numpy as np
+import json
 
 from mesh2seg import *
 from utils import *
@@ -11,23 +12,16 @@ STANDARD_PROPORTION = {5:{'bottomTrunk':3.5, 'midTrunk':4.5, 'topTrunk':6},
                 7:{'bottomTrunk':3.5, 'midTrunk':4.5, 'topTrunk':6}}
 
 #%%
-def getHead(mesh:trimesh.Mesh, return_mesh:bool=False):
+def getHead(mesh:trimesh.base.Trimesh, return_mesh:bool=False):
     ymax = []
     nClusters = len(np.unique(mesh.visual.face_colors, axis=0))
     for i in range(nClusters):
-        verticesID = np.unique(getCluster(mesh, cluster_id=i))
-        ymax.append(np.max(mesh.vertices[verticesID][:,1]))
+        ymax.append(np.max(getCluster(mesh, cluster_id=i, return_mesh=True)[1].vertices))
     headIndex = np.argmax(ymax)
 
-    maskHead = (mesh.visual.face_colors == to_rgba(SEGMENTATION_COLORMAP[headIndex])).all(axis=1)
-    if return_mesh:
-        meshHead = mesh.copy()
-        meshHead.update_faces(maskHead)
-        meshHead.remove_unreferenced_vertices()
-        return maskHead, meshHead
-    return maskHead
-
-def headThreshold(mesh, iteration:int=1E3, step=0.2, epsilon=1E-6):
+    return getCluster(mesh, cluster_id=headIndex, return_mesh=return_mesh)
+    
+def headThreshold(mesh:trimesh.base.Trimesh, iteration:int=1000, step:float=0.2, epsilon:float=1E-6):
     bottom = mesh.centroid.copy()
     
     bottom[1] = np.min(mesh.vertices[:,1])
@@ -55,23 +49,26 @@ def headThreshold(mesh, iteration:int=1E3, step=0.2, epsilon=1E-6):
 def getWristPerimeter() -> float:
     return millimeter2inches(160)
 
-def getHeight(mesh:trimesh.Mesh) -> float:
+def getHeight(mesh:trimesh.base.Trimesh) -> float:
     height = (np.max(mesh.vertices[:,1]) - np.min(mesh.vertices[:,1]))
     return millimeter2inches(height)
 
 def getWeight() -> float:
     return kilogram2pound(62.8)
 
-def getTrunkIndex(bottom_trunk:trimesh.Mesh, top_trunk:trimesh.Mesh) -> float:
-    return float(top_trunk.volume / bottom_trunk.volume)
+def getTrunkIndex(bottom_trunk:trimesh.base.Trimesh, top_trunk:trimesh.base.Trimesh) -> float:
+    return roundcap(float(top_trunk.volume / bottom_trunk.volume), 0.05, 2)
+
+def getGender():
+    return 'Female'
 
 def main(file_name:str):
     meshBody = trimesh.load(file_name)
-    meshBoom(mesh=meshBody, ncluster=12)
+    meshBoom(mesh=meshBody, nclusters=12)
     
     _, meshHead = getHead(meshBody, return_mesh=True)
     headBottom = headThreshold(meshHead).astype(float)
-    headTop = np.max(meshHead[:,1]).astype(float)
+    headTop = np.max(meshHead.vertices[:,1]).astype(float)
     headSize = headTop-headBottom
     headProp = float((np.max(meshBody.vertices[:,1])-np.min(meshBody.vertices[:,1]))//headSize)
 
@@ -103,18 +100,35 @@ def main(file_name:str):
     meshBottomTrunk.remove_unreferenced_vertices()
     
     trunkIndex = getTrunkIndex(meshBottomTrunk, meshTopTrunk)
-    height = getHeight(meshBody)
+    height = roundcap(getHeight(meshBody), 0.5, 1)
     weight = getWeight()
-    wristIndex = getWristPerimeter()/height    
-    getSomatotype(trunkIndex, height, weight, wristIndex)
+    wristIndex = getWristPerimeter()/height
+    genre = getGender()
+    getSomatotype(trunkIndex, height, weight, wristIndex, genre)
     
-def getSomatotype(trunkIndex, height, weight, wristIndex):
+def getSomatotype(trunkIndex, height, weight, wristIndex, genre):
+    if genre == 'Female':
+        with open('../references/female-somatotype.json', 'r') as fjson:
+            somatotypeTable = json.load(fjson)
+    else:
+        with open('../references/male-somatotype.json', 'r') as fjson:
+            somatotypeTable = json.load(fjson)
     
-
-
+    somatotypeTable = {k:np.array(v) for k,v in zip(somatotypeTable.keys(),somatotypeTable.values())} 
+    
+    if ~np.isin(height, somatotypeTable['HEIGHT INCHES']):
+        index = np.where(somatotypeTable['HEIGHT INCHES']==roundcap(height, 1, 1))[0]
+    else:
+        index = np.where(somatotypeTable['HEIGHT INCHES']==height)[0]
+    
+    if ~np.isin(trunkIndex, somatotypeTable['HEIGHT INCHES']):
+        if ~np.isin(trunkIndex, somatotypeTable['HEIGHT INCHES']):
+            index += np.where(somatotypeTable['TRUNK INDEX'][index]==roundcap())
+        
+# %%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-n', '--name', default='meshes/afinese.ply', help="Path to mesh")
+    parser.add_argument('-n', '--name', default='../data/afinese.ply', help="Path to mesh")
     args = parser.parse_args()
     main(args.name)
-# %%
+

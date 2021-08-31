@@ -1,8 +1,10 @@
 #%%
+import argparse
 import trimesh
 import numpy as np
 import json
 
+from somatochart import *
 from mesh2seg import *
 from utils import *
 
@@ -49,9 +51,8 @@ def headThreshold(mesh:trimesh.base.Trimesh, iteration:int=1000, step:float=0.2,
 def getWristPerimeter() -> float:
     return millimeter2inches(160)
 
-def getHeight(mesh:trimesh.base.Trimesh) -> float:
-    height = (np.max(mesh.vertices[:,1]) - np.min(mesh.vertices[:,1]))
-    return millimeter2inches(height)
+def getHeight() -> float:
+    return roundcap(millimeter2inches(1700), 0.5, 1)
 
 def getWeight() -> float:
     return kilogram2pound(62.8)
@@ -59,11 +60,13 @@ def getWeight() -> float:
 def getTrunkIndex(bottom_trunk:trimesh.base.Trimesh, top_trunk:trimesh.base.Trimesh) -> float:
     return roundcap(float(top_trunk.volume / bottom_trunk.volume), 0.05, 2)
 
-def getGender():
+def getGenre():
     return 'Female'
 
-def main(file_name:str):
-    meshBody = trimesh.load(file_name)
+def getAge():
+    return 42.
+
+def getTrunk(meshBody:trimesh.base.Trimesh, return_mesh:bool=False):
     meshBoom(mesh=meshBody, nclusters=12)
     
     _, meshHead = getHead(meshBody, return_mesh=True)
@@ -76,11 +79,11 @@ def main(file_name:str):
 
     hbottom = STANDARD_PROPORTION[headProp]['bottomTrunk']*headSize
     htop = STANDARD_PROPORTION[headProp]['midTrunk']*headSize
-    maskBottomTrunk = getSliceY(meshBody, hbottom, htop, offset, return_mesh=False)
+    maskBottomSlice = getSliceY(meshBody, hbottom, htop, offset, return_mesh=False)
 
     hbottom = STANDARD_PROPORTION[headProp]['midTrunk']*headSize
     htop = STANDARD_PROPORTION[headProp]['topTrunk']*headSize
-    maskTopTrunk = getSliceY(meshBody, hbottom, htop, offset, return_mesh=False)
+    maskTopSlice = getSliceY(meshBody, hbottom, htop, offset, return_mesh=False)
 
     adjCluster = adjacencyCluster(meshBody)
     selectedClusters = np.where(np.sum(adjCluster, axis=1)>=3)[0]
@@ -91,22 +94,34 @@ def main(file_name:str):
         else:
             maskClusters = np.logical_or(maskClusters, getCluster(meshBody, cluster_id=iCluster))
 
-    meshTopTrunk = meshBody.copy()
-    meshTopTrunk.update_faces(np.logical_and(maskClusters, maskTopTrunk))
-    meshTopTrunk.remove_unreferenced_vertices()
+    maskTopTrunk = np.logical_and(maskClusters, maskTopSlice)
+    maskBottomTrunk = np.logical_and(maskClusters, maskBottomSlice)
+    
+    if return_mesh:
+        meshTopTrunk = meshBody.copy()
+        meshTopTrunk.update_faces(maskTopTrunk)
+        meshTopTrunk.remove_unreferenced_vertices()
+        
+        meshBottomTrunk = meshBody.copy()
+        meshBottomTrunk.update_faces(maskBottomTrunk)
+        meshBottomTrunk.remove_unreferenced_vertices()    
+        return (maskBottomTrunk, maskTopTrunk), (meshBottomTrunk, meshTopTrunk)
+    
+    return (maskBottomTrunk, maskTopTrunk)
+    
+    
+def getWristIndex():
+    return getWristPerimeter()/getHeight()*100
 
-    meshBottomTrunk = meshBody.copy()
-    meshBottomTrunk.update_faces(np.logical_and(maskClusters, maskBottomTrunk))
-    meshBottomTrunk.remove_unreferenced_vertices()
-    
+def getSomatotype(mesh:trimesh.base.Trimesh):
+    _ , (meshBottomTrunk, meshTopTrunk) = getTrunk(mesh, return_mesh=True)
     trunkIndex = getTrunkIndex(meshBottomTrunk, meshTopTrunk)
-    height = roundcap(getHeight(meshBody), 0.5, 1)
+    height = getHeight()
+    age = getAge()
     weight = getWeight()
-    wristIndex = getWristPerimeter()/height
-    genre = getGender()
-    getSomatotype(trunkIndex, height, weight, wristIndex, genre)
+    wristIndex = getWristIndex()
+    genre = getGenre()
     
-def getSomatotype(trunkIndex, height, weight, wristIndex, genre):
     if genre == 'Female':
         with open('../references/female-somatotype.json', 'r') as fjson:
             somatotypeTable = json.load(fjson)
@@ -116,19 +131,45 @@ def getSomatotype(trunkIndex, height, weight, wristIndex, genre):
     
     somatotypeTable = {k:np.array(v) for k,v in zip(somatotypeTable.keys(),somatotypeTable.values())} 
     
-    if ~np.isin(height, somatotypeTable['HEIGHT INCHES']):
-        index = np.where(somatotypeTable['HEIGHT INCHES']==roundcap(height, 1, 1))[0]
-    else:
-        index = np.where(somatotypeTable['HEIGHT INCHES']==height)[0]
+    with open('../references/wristHeightIndex.json', 'r') as fjson:
+        wristTable = json.load(fjson)
     
-    if ~np.isin(trunkIndex, somatotypeTable['HEIGHT INCHES']):
-        if ~np.isin(trunkIndex, somatotypeTable['HEIGHT INCHES']):
-            index += np.where(somatotypeTable['TRUNK INDEX'][index]==roundcap())
-        
+    if ~np.isin(height, somatotypeTable['HEIGHT INCHES']):
+        indexHeight = somatotypeTable['HEIGHT INCHES']==roundcap(height, 1, 1)
+    else:
+        indexHeight = somatotypeTable['HEIGHT INCHES']==height
+    
+    if ~np.isin(trunkIndex, somatotypeTable['TRUNK INDEX']):
+        if ~np.isin(trunkIndex := roundcap(trunkIndex, 0.1, 2), somatotypeTable['TRUNK INDEX']):
+            indexTrunk = somatotypeTable['TRUNK INDEX']==roundcap(trunkIndex, 1, 1)
+        else:
+            indexTrunk = somatotypeTable['TRUNK INDEX']==trunkIndex
+    else:
+        indexTrunk = somatotypeTable['TRUNK INDEX']==trunkIndex
+    
+    if 20 <= age < 30:
+        indexWeight = somatotypeTable['MAX LBS @20']==roundcap(weight, 1, 1)
+    elif 30 <= age < 40:
+        indexWeight = somatotypeTable['MAX LBS @30']==roundcap(weight, 1, 1)
+    elif 40 <= age < 50:
+        indexWeight = somatotypeTable['MAX LBS @40']==roundcap(weight, 1, 1)
+    elif age > 50:
+        indexWeight = somatotypeTable['MAX LBS @50']==roundcap(weight, 1, 1)
+    
+    if ~any(index := indexHeight & indexTrunk & indexWeight):
+        if ~any(index := indexHeight & indexTrunk):
+            argMAX = np.array(wristTable['Body Type'])[list(map(lambda x: x[0]<=wristIndex<x[1], wristTable[genre]))][0]
+            indexN = np.argmax(somatotypeTable[argMAX][index])
+
+    return somatotypeTable['ENDO'][index][indexN], \
+            somatotypeTable['MESO'][index][indexN], \
+            somatotypeTable['ECTO'][index][indexN], \
+            somatotypeTable['BALANCE'][index][indexN]
 # %%
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('-n', '--name', default='../data/afinese.ply', help="Path to mesh")
     args = parser.parse_args()
-    main(args.name)
-
+    mesh = trimesh.load(args.name)
+    endo, meso, ecto, balance = getSomatotype(mesh)
+    somatochart3D(endo, meso, ecto, savefig=True)

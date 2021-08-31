@@ -1,7 +1,6 @@
 #%%
 import os
 import trimesh
-import argparse
 import numpy as np
 from scipy.sparse import dok_matrix
 from sklearn.cluster import spectral_clustering
